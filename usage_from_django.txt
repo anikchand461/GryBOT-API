@@ -1,0 +1,7 @@
+import requests
+
+headers = {"gemini_key": "USER_OR_INTERNAL_KEY"}  # optional
+data = {"query": "Hello GryBOT!"}
+
+response = requests.post("http://fastapi-server:8000/chat", json=data, headers=headers)
+print(response.json())  # {"answer": "..."}
