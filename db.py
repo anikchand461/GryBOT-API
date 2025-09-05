@@ -3,16 +3,18 @@ from datetime import datetime
 
 DB_NAME = "grybot.db"
 
+DB_NAME = "grybot.db"
+
 def init_db():
-    conn = sqlite3.connect(DB_NAME)
+    conn = sqlite3.connect(DB_NAME)   # ✅ use grybot.db everywhere
     cursor = conn.cursor()
     cursor.execute("""
-        CREATE TABLE IF NOT EXISTS chats (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_message TEXT,
-            bot_response TEXT,
-            timestamp TEXT
-        )
+    CREATE TABLE IF NOT EXISTS chats (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_message TEXT,
+        bot_response TEXT,
+        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
     """)
     conn.commit()
     conn.close()

@@ -1,6 +1,6 @@
+# chatbot_core.py
 import os
 import random
-from dotenv import load_dotenv
 from langchain_community.document_loaders import TextLoader
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_community.vectorstores import FAISS
@@ -8,54 +8,6 @@ from langchain.chat_models import init_chat_model
 from langchain.chains import ConversationalRetrievalChain
 from langchain.prompts import PromptTemplate
 from db import get_chats
-
-# Load environment variables
-load_dotenv()
-
-# ===== Load / Build FAISS Index =====
-embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
-knowledge_dir = "knowledge_base"
-faiss_index_path = "./faiss_index"
-
-if not os.path.exists(faiss_index_path):
-    documents = []
-    for file in os.listdir(knowledge_dir):
-        if file.endswith(".txt"):
-            loader = TextLoader(os.path.join(knowledge_dir, file), encoding="utf-8")
-            documents.extend(loader.load())
-    db_index = FAISS.from_documents(documents, embeddings)
-    db_index.save_local(faiss_index_path)
-else:
-    db_index = FAISS.load_local(faiss_index_path, embeddings, allow_dangerous_deserialization=True)
-
-retriever = db_index.as_retriever()
-
-# ===== Prompt Template =====
-system_prompt = """
-You are GryBOT, a friendly AI assistant built by Gryork Engineers. Gryork is a company focused on solving liquidity challenges in the infrastructure sector.
-
-## Core Purpose
-- Answer questions about Gryork, its solutions (e.g., CWC model, GRYLINK platform), and related terms only when the user explicitly mentions Gryork, Aditya Tiwari, or Gryork-specific terms.
-- For general questions (e.g., "What is CWC?") that do not mention Gryork or its specific terms, provide a concise, accurate, and general response without referencing Gryork or its context.
-- For questions outside Gryork’s scope, you may politely redirect to Aditya Tiwari or Gryork Engineers if relevant.
-- Avoid overusing Gryork references unless the user intends to discuss Gryork.
-
-## Style
-- Keep responses short, warm, and conversational. Use different colorful emojis when appropriate to match the context 😊.
-- Be clear and simple when discussing technical topics, especially infrastructure or financing concepts.
-- Be empathetic when addressing personal or sensitive questions.
-
-## Details
-Here’s some context about Gryork (use only when Gryork or its terms are mentioned):
-- Aditya Tiwari is the founder of Gryork Engineers, a company focused on solving liquidity challenges in the infrastructure sector through innovative financing solutions.
-- Gryork Engineers develops the Credit on Working Capital (CWC) model, which provides subcontractors with short-term credit backed by a Letter of Guarantee (LoG) from infrastructure companies.
-
-## Context
-{context}
-
-Question: {question}
-"""
-prompt = PromptTemplate(input_variables=["context", "question"], template=system_prompt)
 
 # ===== Small Talk =====
 small_talk_responses = {
@@ -128,22 +80,69 @@ def is_small_talk(query: str):
 def handle_small_talk(query: str) -> str:
     return random.choice(small_talk_responses[query.lower().strip()])
 
-# ===== Core Functions =====
-def init_gemini_llm(gemini_key: str):
-    """Initialize Gemini LLM with dynamic key"""
-    return init_chat_model(
-        "gemini-2.5-flash",
-        model_provider="google_genai",
-        temperature=1.4,
-        api_key=gemini_key
+def build_chain(user_api_key: str):
+    """Build embeddings + retriever + LLM with user's Gemini API key"""
+    embeddings = GoogleGenerativeAIEmbeddings(
+        model="models/embedding-001",
+        google_api_key=user_api_key
     )
 
-def get_bot_response_with_key(query: str, gemini_key: str) -> str:
-    if is_small_talk(query):
-        return handle_small_talk(query)
+    knowledge_dir = "knowledge_base"
+    faiss_index_path = "./faiss_index"
 
-    llm = init_gemini_llm(gemini_key)
-    qa_chain = ConversationalRetrievalChain.from_llm(
+    if not os.path.exists(faiss_index_path):
+        print("⚡ Building FAISS index...")
+        documents = []
+        for file in os.listdir(knowledge_dir):
+            if file.endswith(".txt"):
+                loader = TextLoader(os.path.join(knowledge_dir, file), encoding="utf-8")
+                documents.extend(loader.load())
+
+        db = FAISS.from_documents(documents, embeddings)
+        db.save_local(faiss_index_path)
+    else:
+        db = FAISS.load_local(faiss_index_path, embeddings, allow_dangerous_deserialization=True)
+
+    retriever = db.as_retriever()
+
+    llm = init_chat_model(
+        "gemini-2.5-flash",
+        model_provider="google_genai",
+        temperature=0.8,
+        google_api_key=user_api_key
+    )
+
+    system_prompt = """
+    You are GryBOT, a friendly AI assistant built by Gryork Engineers. Gryork is a company focused on solving liquidity challenges in the infrastructure sector.
+
+    ## Core Purpose
+    - Answer questions about Gryork, its solutions (e.g., CWC model, GRYLINK platform), and related terms only when the user explicitly mentions Gryork, Aditya Tiwari, or Gryork-specific terms.
+    - For general questions (e.g., "What is CWC?") that do not mention Gryork or its specific terms, provide a concise, accurate, and general response without referencing Gryork or its context.
+    - For questions outside Gryork’s scope, you may politely redirect to Aditya Tiwari or Gryork Engineers if relevant.
+    - Avoid overusing Gryork references unless the user intends to discuss Gryork.
+
+    ## Style
+    - Keep responses short, warm, and conversational. Use different colorful emojis when appropriate to match the context 😊.
+    - Be clear and simple when discussing technical topics, especially infrastructure or financing concepts.
+    - Be empathetic when addressing personal or sensitive questions.
+
+    ## Details
+    Here’s some context about Gryork (use only when Gryork or its terms are mentioned):
+    - Aditya Tiwari is the founder of Gryork Engineers, a company focused on solving liquidity challenges in the infrastructure sector through innovative financing solutions.
+    - Gryork Engineers develops the Credit on Working Capital (CWC) model, which provides subcontractors with short-term credit backed by a Letter of Guarantee (LoG) from infrastructure companies.
+
+    ## Context
+    {context}
+
+    Question: {question}
+    """
+
+    prompt = PromptTemplate(
+        input_variables=["context", "question"],
+        template=system_prompt
+    )
+
+    return ConversationalRetrievalChain.from_llm(
         llm=llm,
         retriever=retriever,
         return_source_documents=False,
@@ -151,7 +150,12 @@ def get_bot_response_with_key(query: str, gemini_key: str) -> str:
         verbose=False
     )
 
-    # Load last 10 chats
+def get_bot_response(query: str, user_api_key: str) -> str:
+    """Main entry point"""
+    if is_small_talk(query):
+        return handle_small_talk(query)
+
+    chain = build_chain(user_api_key)
     history = [(u, b) for u, b, _ in reversed(get_chats(10))]
-    result = qa_chain.invoke({"question": query, "chat_history": history})
-    return result["answer"] if result["answer"].strip() else "I’m here to talk about Gryork 🙂"
+    result = chain.invoke({"question": query, "chat_history": history})
+    return result["answer"] or "I’m here to talk about Gryork, Grylink and its work 🙂"
