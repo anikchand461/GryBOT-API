@@ -8,6 +8,28 @@ from langchain.chat_models import init_chat_model
 from langchain.chains import ConversationalRetrievalChain
 from langchain.prompts import PromptTemplate
 from db import get_chats
+from functools import lru_cache
+from langchain_huggingface import HuggingFaceEmbeddings
+
+
+class FallbackEmbedder:
+    def __init__(self, primary, fallback):
+        self.primary = primary
+        self.fallback = fallback
+
+    def embed_query(self, text):
+        try:
+            return self.primary.embed_query(text)
+        except Exception as e:
+            print("⚠️ Gemini quota exceeded, falling back to HuggingFace:", e)
+            return self.fallback.embed_query(text)
+
+    def embed_documents(self, texts):
+        try:
+            return self.primary.embed_documents(texts)
+        except Exception as e:
+            print("⚠️ Gemini quota exceeded (batch), falling back:", e)
+            return self.fallback.embed_documents(texts)
 
 # ===== Small Talk =====
 small_talk_responses = {
@@ -80,35 +102,50 @@ def is_small_talk(query: str):
 def handle_small_talk(query: str) -> str:
     return random.choice(small_talk_responses[query.lower().strip()])
 
-def build_chain(user_api_key: str):
-    """Build embeddings + retriever + LLM with user's Gemini API key"""
-    embeddings = GoogleGenerativeAIEmbeddings(
+@lru_cache(maxsize=5000)
+def cached_embed(text, embedder):
+    return embedder.embed_query(text)
+
+knowledge_dir = "knowledge_base"
+faiss_index_path = "./faiss_index"
+
+if not os.path.exists(faiss_index_path):
+    print("⚡ Building FAISS index...")
+    documents = []
+    for file in os.listdir(knowledge_dir):
+        if file.endswith(".txt"):
+            loader = TextLoader(os.path.join(knowledge_dir, file), encoding="utf-8")
+            documents.extend(loader.load())
+
+    # Temporary HuggingFace embeddings just for FAISS building
+    temp_embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+    db = FAISS.from_documents(documents, temp_embeddings)
+    db.save_local(faiss_index_path)
+else:
+    # Load with dummy embedder, real embedder will be injected later
+    temp_embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+    db = FAISS.load_local(faiss_index_path, temp_embeddings, allow_dangerous_deserialization=True)
+
+
+def get_embeddings(user_api_key: str):
+    """Return Gemini embeddings with fallback to HuggingFace"""
+    primary = GoogleGenerativeAIEmbeddings(
         model="models/embedding-001",
         google_api_key=user_api_key
     )
+    fallback = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+    return FallbackEmbedder(primary, fallback)
 
-    knowledge_dir = "knowledge_base"
-    faiss_index_path = "./faiss_index"
-
-    if not os.path.exists(faiss_index_path):
-        print("⚡ Building FAISS index...")
-        documents = []
-        for file in os.listdir(knowledge_dir):
-            if file.endswith(".txt"):
-                loader = TextLoader(os.path.join(knowledge_dir, file), encoding="utf-8")
-                documents.extend(loader.load())
-
-        db = FAISS.from_documents(documents, embeddings)
-        db.save_local(faiss_index_path)
-    else:
-        db = FAISS.load_local(faiss_index_path, embeddings, allow_dangerous_deserialization=True)
+def build_chain(user_api_key: str):
+    """Build embeddings + retriever + LLM with user's Gemini API key"""
+    embeddings = get_embeddings(user_api_key)
 
     retriever = db.as_retriever()
 
     llm = init_chat_model(
         "gemini-2.5-flash",
         model_provider="google_genai",
-        temperature=0.8,
+        temperature=1.4,
         google_api_key=user_api_key
     )
 
