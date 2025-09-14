@@ -1,0 +1,20 @@
+# Contents of /Users/anikchand/Documents/GryBOT-API/.dockerignore
+
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.db
+*.sqlite3
+*.log
+*.env
+.DS_Store
+*.egg-info/
+dist/
+build/
+*.zip
+*.tar.gz
+*.tgz
+*.whl
+*.egg
